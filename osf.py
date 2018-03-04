@@ -64,9 +64,10 @@ class Cleansing(Osf_Initialize):
         self.processed_data.WARTOSC = self.processed_data.WARTOSC.str.lower()
         return
     def clean_not_printable(self):
+        polish = u"ąęłóźżćń"
         def clean_not_printable_row(row):
             if type(row.WARTOSC) != float and row.WARTOSC:
-                string.printable = string.printable + u"ąęłóźżćń"
+                string.printable = string.printable + polish
                 row.WARTOSC = filter(lambda x: x in string.printable, row.WARTOSC)
                 return row
         self.processed_data = self.processed_data.apply(clean_not_printable_row, axis=1)
@@ -128,3 +129,4 @@ data.clean_not_printable()
 data = Lemmatization(data)
 data.lemmatize()
 print data.processed_data.WARTOSC
+print data.processed_data["LEMMATIZED"]
