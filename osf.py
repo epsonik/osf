@@ -3,11 +3,13 @@
 import pandas as pd
 import string
 import xml
+import heapq
 import json
 from xml.dom import minidom
 from urllib2 import HTTPError
 import requests
 import gensim
+import numpy as np
 from nltk.tokenize import word_tokenize
 url='http://ws.clarin-pl.eu/nlprest2/base/process'
 tool="any2txt|wcrft2"
@@ -171,7 +173,7 @@ class OsfData_Lemmatization(Cleansing):
                     r = requests.post(url, data=json.dumps(createURL(row.WARTOSC.encode('utf8'))),
                                       headers=headers)
                     if r.status_code == 200:
-                        row["LEMMATIZED"] = parseXML(r.text,row)
+                        row["LEMMATIZED"] =parseXML(r.text,row)
                         return row
                 except HTTPError:
                     print 'Failed to open %d -%s' % (row.ROWNUM,row)
@@ -187,7 +189,8 @@ class OsfData_Lemmatization(Cleansing):
                         path_ctag = path.getElementsByTagName(ctag)[0].firstChild.toxml()
                         if any(x in path_ctag for x in set):
                             description.append(path_base)
-                return description
+                b=" ".join(description)
+                return b
             except xml.parsers.expat.ExpatError, e:
                 print "ERROR "
                 print e
@@ -206,47 +209,44 @@ class OsfData_Wordlist():
         self.clean_data= pd.read_csv(csv_link, encoding='utf-8', header=0)
         self.processed_data = self.clean_data
     def build_wordlist(self):
-        def sortFreqDict(freqdict):
-            aux = [(freqdict[key], key) for key in freqdict]
-            aux.sort()
-            aux.reverse()
-            return aux
-
-        def wordListToFreqDict(wordlist):
-            wordfreq = [wordlist.count(p) for p in wordlist]
-            return dict(zip(wordlist, wordfreq))
+        from nltk.tokenize import word_tokenize
         def build_wordlist_row(row):
-            row["DICT"]=sortFreqDict(wordListToFreqDict(row["LEMMATIZED"]))
+            row["LEMMATIZED2"] = word_tokenize(row["LEMMATIZED"])
             return row
         self.processed_data = self.processed_data.apply(build_wordlist_row, axis=1)
-
     def create_dictionary(self):
-        self.dictionary = gensim.corpora.Dictionary(self.processed_data["LEMMATIZED"])
-        self.corpus = [self.dictionary.doc2bow(gen_doc) for gen_doc in self.processed_data["LEMMATIZED"]]
+        gen_docs=self.processed_data["LEMMATIZED2"].tolist()
+        self.dictionary = gensim.corpora.Dictionary(gen_docs)
+        self.corpus = [self.dictionary.doc2bow(gen_doc) for gen_doc in gen_docs]
         self.tf_idf = gensim.models.TfidfModel(self.corpus)
         self.sims = gensim.similarities.Similarity('/home/mbarto/PycharmProjects/osf',
                                               self.tf_idf[self.corpus],
                                                    num_features=len(self.dictionary))
+        print self.sims
     def find_sims(self):
         def find_sims_row(row):
-            query_doc_bow = self.dictionary.doc2bow(row["LEMMATIZED"])
+            gen_doc =row["LEMMATIZED2"]
+            query_doc_bow = self.dictionary.doc2bow(gen_doc)
             query_doc_tf_idf = self.tf_idf[query_doc_bow]
-            print row["LEMMATIZED"]
-            print self.sims[query_doc_tf_idf]
+            print row["LEMMATIZED2"]
+            a=self.sims[query_doc_tf_idf]
+            print a
             return row
         self.processed_data = self.processed_data.apply(find_sims_row, axis=1)
 
 
 # data = Osf_Initialize()
 # file_path="export195.csv"
-# data.initialize_sekcja("opisProjektuStanWiedzy.csv",60)
+# data.initialize_sekcja("opisProjektuStanWiedzy.csv",30)
 # data = Cleansing(data)
 # data.clean()
 # data.clean_not_printable()
 # data = OsfData_Lemmatization(data)
 # data.lemmatize()
+# print data.processed_data["LEMMATIZED"][5]
+# print type(data.processed_data["LEMMATIZED"][5])
 data = OsfData_Wordlist()
-print data.processed_data["LEMMATIZED"]
+data.build_wordlist()
 data.create_dictionary()
 data.find_sims()
 
