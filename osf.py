@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
 #!/usr/bin/env python
-import pandas as pd
 import string
+import collections
 from sklearn import metrics
-
 from  requests import ConnectionError
 from pylab import *
 
@@ -13,18 +12,10 @@ from xml.dom import minidom
 from urllib2 import HTTPError
 import requests
 import gensim
-import numpy as np
-
-
-import io
-import os
-import regex
-
+from heapq import nlargest
 from sklearn.feature_extraction.text import  CountVectorizer
+from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
-from sklearn.linear_model import LogisticRegression, LogisticRegressionCV
-from sklearn.model_selection import train_test_split, cross_val_score
-from sklearn.pipeline import make_pipeline, Pipeline
 
 import numpy as np
 import pandas as pd
@@ -222,54 +213,101 @@ class OsfData_Wordlist():
     corpus = []
     tf_idf = []
     sims = []
-    def __init__(self,tup):
-        csv_link = "opisProjektuEfektExportClean%s.csv" % tup
-        self.clean_data= pd.read_csv(csv_link, encoding='utf-8', header=0)
-        self.processed_data = self.clean_data
+    mtx= pd.DataFrame()
+    k = list()
+    a = pd.DataFrame
+    lemmatized= "LEMMATIZED"
+    lemmatized2= "LEMMATIZED2"
+    type = "TYPE"
+    stat = "STAT"
+    klasa_obiektu = "KLASA_OBIEKTU"
+    def create_mtx(self):
+        def read(x):
+            csv_link = "opisProjektuEfektExportClean%s.csv" % x
+            a = pd.read_csv(csv_link, encoding='utf-8', header=0)
+            a[self.type] = pd.Series(len(a) * [x])
+            return a
+        self.processed_data=pd.concat([read(x) for x in range(1,4)],ignore_index=True)
+        self.processed_data = self.processed_data.reindex(np.random.permutation(self.processed_data.index))
     def build_wordlist(self):
         from nltk.tokenize import word_tokenize
         def build_wordlist_row(row):
-            if type(row["LEMMATIZED"]) != float and row["LEMMATIZED"]:
+            if type(row[self.lemmatized]) != float and row[self.lemmatized]:
                 try:
-                    row["LEMMATIZED2"] = word_tokenize(row["LEMMATIZED"])
+                    row[self.lemmatized2] = word_tokenize(row[self.lemmatized])
                     return row
                 except TypeError:
-                    print row["LEMMATIZED"]
+                    print row[self.lemmatized]
                     print 1
             else:
                 print "jolo"
         self.processed_data = self.processed_data.apply(build_wordlist_row, axis=1)
-    def create_dictionary(self,tup):
-        csv_link = "exportTyp%sSD.csv" % tup
-        gen_docs=self.processed_data["LEMMATIZED2"].tolist()
+    def create_dictionary(self):
+        gen_docs=self.processed_data[self.lemmatized2].tolist()
         try:
             self.dictionary = gensim.corpora.Dictionary(gen_docs)
             self.corpus = [self.dictionary.doc2bow(gen_doc) for gen_doc in gen_docs]
-            self.dictionary.save_as_text(csv_link)
         except (TypeError,AttributeError) as e:
             print e
             print 2
 
         self.tf_idf = gensim.models.TfidfModel(self.corpus)
         self.sims = gensim.similarities.Similarity('/home/mbarto/PycharmProjects/osf',
-                                              self.tf_idf[self.corpus],
+                                                   self.tf_idf[self.corpus],
                                                    num_features=len(self.dictionary))
-
+    def find_sims_row(self,row):#find sims of row to every in set
+        gen_doc =row[self.lemmatized2]
+        try:
+            query_doc_bow = self.dictionary.doc2bow(gen_doc)
+            query_doc_tf_idf = self.tf_idf[query_doc_bow]
+            a=self.sims[query_doc_tf_idf]
+            return a
+        except AttributeError as e:
+            print e
     def find_sims(self):
         def find_sims_row(row):
-            gen_doc =row["LEMMATIZED2"]
+            gen_doc =row[self.lemmatized2]
             try:
                 query_doc_bow = self.dictionary.doc2bow(gen_doc)
                 query_doc_tf_idf = self.tf_idf[query_doc_bow]
                 a=self.sims[query_doc_tf_idf]
-                b=np.delete(a,0,0)
-                print gen_doc
-                print a
+                self.k.append(a)
                 return row
             except AttributeError as e:
                 print e
                 print 3
         self.processed_data = self.processed_data.apply(find_sims_row, axis=1)
+    def find_n_max(self,idx):
+        b = self.find_sims_row(self.processed_data.iloc[idx])
+        m = nlargest(2, xrange(len(b)), key=b.__getitem__)
+        return self.processed_data.iloc[m[1]]
+
+    def prepare_sp_mtx(self):
+        lenm=len(self.processed_data.index)
+        self.mtx = pd.DataFrame(columns=range(lenm))
+        for i in range(lenm):
+            df2 = pd.DataFrame([pd.Series(np.zeros(lenm))], columns=range(lenm))
+            df3 = self.mtx.append(df2,ignore_index=True)
+            self.mtx=df3
+    def calculate_sp_mtx(self, n=7):
+
+        lenm=len(self.processed_data.index)
+        t=0
+        for index, row in self.processed_data.iterrows():
+            print t
+            vec = list()
+            row=self.processed_data.iloc[t]
+            b = self.find_sims_row(row)
+            df2 = pd.DataFrame([b], columns=range(lenm))
+            m = nlargest(n, xrange(len(b)), key=b.__getitem__)
+            for i in range(n):
+                vec.append(self.processed_data.iloc[m[i]][self.type])
+            df2[self.stat]=str(collections.Counter(vec))
+            df2[self.klasa_obiektu] = row[self.type]
+            df3= self.mtx.append(df2,ignore_index=True)
+            self.mtx=df3
+            t+=1
+
 class OsfClassify():
     def create_mtx(self):
         def get_book_df(tup):
@@ -294,23 +332,21 @@ class OsfClassify():
             test_size=0.1,
             stratify=self.processed_data['type'],
         )
+        print test_df
         vectorizer = CountVectorizer()
-        print "jolo"
         print vectorizer.fit(train_df['txt'])
         import sys
         reload(sys)
         sys.setdefaultencoding('utf8')
         X_train = vectorizer.transform(train_df['txt'])
-        print "jolo2"
         print X_train
 
         X_test = vectorizer.transform(test_df['txt'])
         model = LogisticRegression(class_weight='balanced', dual=True)
         model.fit(X_train, train_df['type'])
         print
-        print "jolo3"
         print model.score(X_test, test_df['type'])
-        print
+        print X_test
         target = test_df['type']
         predicted = model.predict(X_test)
         print (metrics.classification_report(target, predicted, digits=4))
@@ -343,19 +379,21 @@ class OsfClassify():
 # data.lemmatize(str(x))
 # print "typ"+str(x)
 # print "done%s" % x
-# x=3
-# data = OsfData_Wordlist(str(x),"opisProjektuEfektExportClean")
-# data.build_wordlist()
-# data.create_dictionary(str(x))
-# data.find_sims()
-# print "done %s" % x
-data = OsfClassify()
+
+data = OsfData_Wordlist()
 data.create_mtx()
-data.statistics()
-data.vektorize()
-# wczytanie pliku plaskiego
-# wydzielenie sekcji
-# zapis ka?dej sekcji do osbnego pliku
-# wyczyszczenie
-# zapis oczyszonego do pliku clean
+print "ok"
+data.build_wordlist()
+print "ok2"
+data.create_dictionary()
+print "ok3"
+data.calculate_sp_mtx()
+print "ok4"
+print data.mtx
+
+# data = OsfClassify()
+# data.create_mtx()
+# data.statistics()
+# data.vektorize()
+
 
