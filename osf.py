@@ -179,7 +179,7 @@ class OsfData_Lemmatization(Cleansing):
         def lemmatize_row(row):
             if type(row.WARTOSC) != float and row.WARTOSC:
                 try:
-                    r = requests.post(url, data=json.dumps(createURL(row.WARTOSC.encode('utf8'))),
+                    r = requests.post(url, data=json.dumps(createURL(row.WARTOSC.encode('utf-8'))),
                                       headers=headers)
                     if r.status_code == 200:
                         row["LEMMATIZED"] =parseXML(r.text,row)
@@ -208,12 +208,13 @@ class OsfData_Lemmatization(Cleansing):
 
         self.processed_data = self.processed_data.apply(lemmatize_row, axis=1)
         data.processed_data.to_csv('opisProjektuEfektExportClean' +tup+ ".csv", encoding='utf8')
-class OsfData_Wordlist():
+class OsfData_Sim():
     dictionary=[]
     corpus = []
     tf_idf = []
     sims = []
     mtx= pd.DataFrame()
+    mtx_pod= pd.DataFrame()
     k = list()
     a = pd.DataFrame
     lemmatized= "LEMMATIZED"
@@ -293,63 +294,143 @@ class OsfData_Wordlist():
 
         lenm=len(self.processed_data.index)
         t=0
+
         for index, row in self.processed_data.iterrows():
-            print t
             vec = list()
+            print t
             row=self.processed_data.iloc[t]
             b = self.find_sims_row(row)
             df2 = pd.DataFrame([b], columns=range(lenm))
+            df4= self.mtx_pod.append(df2,ignore_index=True)
+            self.mtx_pod=df4
             m = nlargest(n, xrange(len(b)), key=b.__getitem__)
             for i in range(n):
                 vec.append(self.processed_data.iloc[m[i]][self.type])
+
             df2[self.stat]=str(collections.Counter(vec))
             df2[self.klasa_obiektu] = row[self.type]
             df3= self.mtx.append(df2,ignore_index=True)
             self.mtx=df3
             t+=1
+        self.mtx_pod.to_csv("mtx_pod.csv",index=False,encoding='utf8')
+    def create_heat_map(self):
+        csv_link = "mtx_pod3.csv"
+        mtx_pod = pd.read_csv(csv_link, encoding='utf-8')
+        # np.fill_diagonal(mtx_pod.as_matrix(),0)
+        mtx_pod_mtx=mtx_pod.as_matrix()
+        mtx_pod_mtx[mtx_pod_mtx > .1] = 0
+        print mtx_pod_mtx
+        import seaborn as sns
+        import matplotlib.pylab as plt
+        ax = sns.heatmap(mtx_pod_mtx)
+        plt.title("Wykres klasa 3")
+        plt.show()
+    def create_fq(self):
+        csv_link = "mtx_pod.csv"
+        mtx_pod = pd.read_csv(csv_link, encoding='utf-8')
+        mtx_pod_mtx=mtx_pod.as_matrix()
+        import numpy as np
+        import matplotlib.pyplot as plt
+        k=[np.random.choice(mtx_pod_mtx.flatten()) for x in range(1000)]
+        plt.plot(k, 'r')
+        plt.show()
 
 class OsfClassify():
+    typ= "TYP"
+    tekst = "TEKST"
+    X_train = vectorizer = CountVectorizer()
+    X_test = vectorizer = CountVectorizer()
+    model = LogisticRegression()
     def create_mtx(self):
-        def get_book_df(tup):
+        def get_osf_data_df(tup):
             file_path = "opisProjektuEfektExportClean%s.csv" % tup
             clean_data = pd.read_csv(file_path, encoding='utf-8', header=0)
             a = pd.DataFrame({
-                'type': pd.Series(len(clean_data) * [tup]),
-                'txt': pd.Series(clean_data["LEMMATIZED"]),
+                self.typ: pd.Series(len(clean_data) * [tup]),
+                self.tekst: pd.Series(clean_data["LEMMATIZED"]),
             })
             return a
-        self.processed_data=pd.concat([get_book_df(x) for x in range(1,4)],ignore_index=True)
+        self.processed_data=pd.concat([get_osf_data_df(x) for x in range(1,4)],ignore_index=True)
+        self.processed_data = self.processed_data.reindex(np.random.permutation(self.processed_data.index))
+        self.processed_data
     def statistics(self):
-        print self.processed_data.groupby('type').count()
-        self.processed_data['words'] = self.processed_data['txt'].apply(
+        self.processed_data.groupby(self.typ).count()
+        self.processed_data['words'] = self.processed_data[self.tekst].apply(
             lambda x: len(x.split())
         )
-        print self.processed_data.groupby('type')['words'].describe()
-        print self.processed_data.groupby('type')['words'].quantile(0.98)
-    def vektorize(self):
-        train_df, test_df = train_test_split(
+        # print self.processed_data.groupby(self.typ)['words'].describe()
+        # print self.processed_data.groupby(self.typ)['words'].quantile(0.98)
+    def classify(self):
+        from sklearn.metrics import mean_squared_error
+        self.train_df, self.test_df = train_test_split(
             self.processed_data,
             test_size=0.1,
-            stratify=self.processed_data['type'],
+            stratify=self.processed_data[self.typ],
         )
-        print test_df
         vectorizer = CountVectorizer()
-        print vectorizer.fit(train_df['txt'])
+        vectorizer.fit(self.train_df[self.tekst])
         import sys
         reload(sys)
         sys.setdefaultencoding('utf8')
-        X_train = vectorizer.transform(train_df['txt'])
-        print X_train
+        self.X_train = vectorizer.transform(self.train_df[self.tekst])
+        self.Y_train = self.train_df[self.typ]
+        self.X_test = vectorizer.transform(self.test_df[self.tekst])
+        self.Y_test = self.test_df[self.typ]
+        self.model = LogisticRegression(class_weight='balanced', dual=True)
+        self.model.fit(self.X_train, self.Y_train)#X,Y
 
-        X_test = vectorizer.transform(test_df['txt'])
-        model = LogisticRegression(class_weight='balanced', dual=True)
-        model.fit(X_train, train_df['type'])
+        self.model.score(self.X_test, self.Y_test)
+
+        target = self.test_df[self.typ]
+        predicted = self.model.predict(self.X_test)
+        print mean_squared_error(self.Y_test, predicted)
+        (metrics.classification_report(target, predicted, digits=4))
+    def vis_decision_boundary(self):
+        import numpy as np
+        import matplotlib.pyplot as plt
+        from sklearn.ensemble import VotingClassifier
+
+        vectorizer = CountVectorizer()
+        vectorizer.fit(self.processed_data[self.tekst])
+        # Loading some example data
+        X =vectorizer.transform(self.processed_data[self.tekst])
+        y = self.processed_data[self.typ]
+
+        # Training classifieri
+        clf1 = LogisticRegression()
+        clf2 =  LogisticRegression()
+        clf3 =  LogisticRegression()
+        eclf = VotingClassifier(estimators=[('dt', clf1), ('knn', clf2),
+                                            ('svc', clf3)],
+                                voting='soft', weights=[2, 1, 2])
+        clf1.fit(X, y)
+        clf2.fit(X, y)
+        clf3.fit(X, y)
+        eclf.fit(X, y)
+
+        # Plotting decision regions
+        x_min, x_max = X[:, 0].min() - 1, X[:, 0].max() + 1
+        y_min, y_max = X[:, 1].min() - 1, X[:, 1].max() + 1
+        xx, yy = np.meshgrid(np.arange(x_min, x_max, 0.1),
+                             np.arange(y_min, y_max, 0.1))
+
+        f, axarr = plt.subplots(2, 2, sharex='col', sharey='row', figsize=(10, 8))
+
+        for idx, clf, tt in zip(product([0, 1], [0, 1]),
+                                [clf1, clf2, clf3, eclf],
+                                ['Decision Tree (depth=4)', 'KNN (k=7)',
+                                 'Kernel SVM', 'Soft Voting']):
+            Z = clf.predict(np.c_[xx.ravel(), yy.ravel()])
+            Z = Z.reshape(xx.shape)
+
+            axarr[idx[0], idx[1]].contourf(xx, yy, Z, alpha=0.4)
+            axarr[idx[0], idx[1]].scatter(X[:, 0], X[:, 1], c=y,
+                                          s=20, edgecolor='k')
+            axarr[idx[0], idx[1]].set_title(tt)
+
+        plt.show()
+    def vis(self):
         print
-        print model.score(X_test, test_df['type'])
-        print X_test
-        target = test_df['type']
-        predicted = model.predict(X_test)
-        print (metrics.classification_report(target, predicted, digits=4))
 # for x in range(1,4):
 #     data = Osf_Initialize()
 #     file_path="exportTyp%sS.csv" % x
@@ -367,9 +448,9 @@ class OsfClassify():
 # data.lemmatize(str(x))
 # print "typ"+str(x)
 # print "done%s" % x
-
+#
 # data = Osf_Initialize()
-# x=1
+# x=2
 # file_path="opisProjektuEfekt%s.csv" % x
 # data.initialize(file_path)
 # data = Cleansing(data)
@@ -377,23 +458,29 @@ class OsfClassify():
 # data.clean_not_printable()
 # data = OsfData_Lemmatization(data)
 # data.lemmatize(str(x))
-# print "typ"+str(x)
 # print "done%s" % x
+# print data.processed_data.iloc[2]["LEMMATIZED"]
 
-data = OsfData_Wordlist()
-data.create_mtx()
-print "ok"
-data.build_wordlist()
-print "ok2"
-data.create_dictionary()
-print "ok3"
-data.calculate_sp_mtx()
-print "ok4"
-print data.mtx
-
-# data = OsfClassify()
+# data = OsfData_Sim()
 # data.create_mtx()
+# data.build_wordlist()
+# data.create_dictionary()
+# data.calculate_sp_mtx()
+# print "ok4"
+# data.create_heat_map()
+# data.create_3d()
+data = OsfClassify()
+data.create_mtx()
 # data.statistics()
-# data.vektorize()
-
+data.classify()
+# print "X"
+# print  data.X_train
+# print "Y"
+# print data.train_df["TYP"].tolist()
+# data.vis_class_prediction_error()
+data.vis()
+#
+# import numpy as np
+# import matplotlib.pyplot as plt
+# from sklearn import linear_model, datasets
 
